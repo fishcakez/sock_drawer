@@ -1,0 +1,12 @@
+{application, sock_drawer,
+ [
+  {description, "Socket Creation and Pooling"},
+  {vsn, "0.1.0"},
+  {registered, [sock_drawer_sup, sd_reg]},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { sock_drawer_app, []}},
+  {env, []}
+ ]}.
