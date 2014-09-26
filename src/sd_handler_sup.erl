@@ -25,12 +25,18 @@
 
 -export([start_link/4]).
 -export([start_handler/1]).
+-export([acquire/4]).
 -export([terminate_handler/2]).
 -export([count_handlers/1]).
 
-%% supervisor api
+%% gen_server api
 
 -export([init/1]).
+-export([handle_call/3]).
+-export([handle_cast/2]).
+-export([handle_info/2]).
+-export([code_change/3]).
+-export([terminate/2]).
 
 %% public api
 
@@ -42,8 +48,8 @@
       Pid :: pid(),
       Reason :: term().
 start_link(Id, PRef, Handler, N) ->
-    supervisor:start_link({via, sd_reg, {Id, {?MODULE, {PRef, N}}}},
-                          ?MODULE, {PRef, Handler}).
+    Name = {via, sd_reg, {Id, {?MODULE, {PRef, N}}}},
+    gen_server:start_link(Name, ?MODULE, {gen_server, Name, PRef, Handler}, []).
 
 -spec start_handler(Sup) -> {ok, Pid} | {ok, Pid, Info} | {error, Reason} when
       Sup :: pid(),
@@ -52,6 +58,14 @@ start_link(Id, PRef, Handler, N) ->
       Reason :: term().
 start_handler(Sup) ->
     supervisor:start_child(Sup, []).
+
+-spec acquire(Sup, PRef, Manager, MRef) -> ok when
+      Sup :: pid(),
+      PRef :: reference(),
+      Manager :: pid(),
+      MRef :: reference().
+acquire(Sup, PRef, Manager, MRef) ->
+    gen_server:cast(Sup, {acquire, PRef, Manager, self(), MRef}).
 
 -spec terminate_handler(Sup, Pid) -> ok | {error, not_found} when
       Sup :: pid(),
@@ -66,8 +80,47 @@ count_handlers(Sup) ->
     Counts = supervisor:counter_children(Sup),
     proplists:get_value(active, Counts, 0).
 
-%% supervisor api
+%% gen_server api
 
-init({PRef, Handler}) ->
+init({gen_server, Name, PRef, Handler}) ->
+    supervisor:init({Name, ?MODULE,  {supervisor, PRef, Handler}});
+init({supervisor, PRef, Handler}) ->
     Handler2 = sd_util:append_args(Handler, [PRef]),
     {ok, {{simple_one_for_one, 0, 1}, [Handler2]}}.
+
+handle_call(Request, From, State) ->
+    supervisor:handle_call(Request, From, State).
+
+handle_cast({acquire, PRef, Manager, Creator, MRef}, State) ->
+    case supervisor:handle_call({start_child, []}, {self(), ?MODULE}, State) of
+        {reply, {ok, Pid}, State2} when is_pid(Pid) ->
+            HInfo = {Pid, self(), Pid},
+            sd_manager:acquire(Manager, PRef, Creator, MRef, HInfo),
+            {noreply, State2};
+        {reply, {ok, Pid, Pid2}, State2} when is_pid(Pid2) ->
+            HInfo = {Pid2, self(), Pid},
+            sd_manager:acquire(Manager, PRef, Creator, MRef, HInfo),
+            {noreply, State2};
+        {reply, {ok, Pid, _Info}, State2} ->
+            HInfo = {Pid, self(), Pid},
+            sd_manager:acquire(Manager, PRef, Creator, MRef, HInfo),
+            {noreply, State2};
+        {reply, {ok, undefined}, State2} ->
+            sd_creator:stop(Creator, MRef),
+            {noreply, State2};
+        {reply, {error, Reason}, State2} ->
+            Reason2 = {failed_to_start_child, handler, Reason},
+            sd_creator:stop(Creator, MRef, Reason2),
+            {noreply, State2}
+    end;
+handle_cast(Request, State) ->
+    supervisor:handle_cast(Request, State).
+
+handle_info(Info, State) ->
+    supervisor:handle_info(Info, State).
+
+code_change(OldVsn, State, Extra) ->
+    supervisor:code_change(OldVsn, State, Extra).
+
+terminate(Reason, State) ->
+    supervisor:terminate(Reason, State).

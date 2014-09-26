@@ -91,10 +91,10 @@ init({Id, Mod, Args}) ->
             exit({bad_return, {Mod, init, Other}})
     end.
 
-ready({acquire, PRef, Creator, MRef},
+ready({acquire, PRef, Creator, MRef, HInfo},
       #state{config=#config{pool_ref=PRef, max_sockets=MaxSockets},
              locks=Locks} = State) ->
-    sd_creator:acquired(Creator, MRef),
+    sd_creator:acquired(Creator, MRef, HInfo),
     Locks2 = Locks + 1,
     State2 = State#state{locks=Locks2},
     case Locks2 of
@@ -159,9 +159,9 @@ which_creators(#state{config=#config{creators=Creators}}) ->
     ToList = fun({Creator, _MRef}, Acc) -> [Creator | Acc] end,
     gb_sets:fold(ToList, [], Creators).
 
-full({acquire, PRef, Creator, MRef},
+full({acquire, PRef, Creator, MRef, HInfo},
      #state{config=#config{pool_ref=PRef}, waiters=Waiters} = State) ->
-    {next_state, full, State#state{waiters=[{Creator, MRef} | Waiters]}}.
+    {next_state, full, State#state{waiters=[{Creator, MRef, HInfo} | Waiters]}}.
 
 leave_config(PRef, Creator, MRef,
              #config{pool_ref=PRef, creators=Creators} = Config) ->
@@ -172,6 +172,12 @@ leave_config(PRef, Creator, MRef,
 full({leave, PRef, Creator, MRef}, _From, #state{config=Config} = State) ->
     Config2 = leave_config(PRef, Creator, MRef, Config),
     {reply, ok, full, State#state{config=Config2}};
+full({release, PRef}, _From,
+     #state{config=#config{pool_ref=PRef, max_sockets=MaxSockets},
+            locks=MaxSockets,
+            waiters=[{Creator, MRef, HInfo} | Waiters]} = State) ->
+    sd_creator:acquired(Creator, MRef, HInfo),
+    {reply, ok, full, State#state{waiters=Waiters}};
 full({release, PRef}, _From,
      #state{config=#config{pool_ref=PRef, max_sockets=MaxSockets},
             locks=MaxSockets, waiters=[{Creator, MRef} | Waiters]} = State) ->
@@ -188,18 +194,18 @@ full({join, PRef, Watcher, ARef, Creators}, _From,
       #state{config=#config{pool_ref=OldPRef, creators=Old} = Config,
             waiters=Waiters} = State) when PRef =/= OldPRef ->
     {Waiters2, New} = full_join(Creators, PRef),
-    Old2 = remove_waiters(Waiters, Old),
+    Old2 = leave_waiters(Waiters, Old),
     ok = leave_old(Old2),
     Config2 = Config#config{pool_ref=PRef, creators=New},
     State2 = State#state{config=Config2, waiters=Waiters2},
-    case gb_sets:size(Old2) of
+    case gb_sets:size(Old) of
         0 ->
             sd_watcher:init_ack(Watcher, ARef),
             {reply, {ok, ARef}, full, State2};
         _Other ->
             Reload = #reload{old_pool_ref=OldPRef, pool_ref=PRef,
                              state_name=full, state=State2,
-                             watcher=Watcher, ack_ref=ARef, old=Old2},
+                             watcher=Watcher, ack_ref=ARef, old=Old},
             {reply, {ok, ARef}, reload, Reload}
     end;
 full(which_creators, _From,
@@ -220,21 +226,22 @@ full_join([Creator | Creators], PRef, Waiters, New) ->
     New2 = gb_sets:insert(Elem, New),
     full_join(Creators, PRef, [Elem | Waiters], New2).
 
-remove_waiters([], Old) ->
+leave_waiters([], Old) ->
     Old;
-remove_waiters([{Creator, MRef} = Elem | Waiters], Old) ->
-    demonitor(MRef, [flush]),
-    sd_creator:left(Creator, MRef),
-    remove_waiters(Waiters, gb_sets:delete(Elem, Old)).
+leave_waiters([{Creator, MRef, HInfo} | Waiters], Old) ->
+    sd_creator:leave(Creator, MRef, HInfo),
+    leave_waiters(Waiters, gb_sets:delete({Creator, MRef}, Old));
+leave_waiters([{Creator, MRef} = Elem | Waiters], Old) ->
+    sd_creator:leave(Creator, MRef),
+    leave_waiters(Waiters, gb_sets:delete(Elem, Old)).
 
-reload({acquire, PRef, _Creator, _MRef} = Acquire,
+reload({acquire, PRef, _Creator, _MRef, _HInfo} = Acquire,
        #reload{pool_ref=PRef, state_name=StateName, state=State} = Reload) ->
     {next_state, StateName2, State2} = ?MODULE:StateName(Acquire, State),
     {next_state, reload, Reload#reload{state_name=StateName2, state=State2}};
-reload({acquire, OldPRef, _Creator, _MRef},
+reload({acquire, OldPRef, Creator, MRef, HInfo},
        #reload{old_pool_ref=OldPRef} = Reload) ->
-    % Already sent _Creator a leave message, it will send leave request so
-    % ignore this.
+    sd_creator:leave(Creator, MRef, HInfo),
     {next_state, reload, Reload}.
 
 reload({leave, OldPRef, Creator, MRef}, _From,
@@ -297,6 +304,10 @@ handle_info({'DOWN', _MRef, _, Pid, Reason}, _StateName, State) ->
 ready_exit(#state{locks=Locks} = State) ->
     {next_state, ready, State#state{locks=(Locks-1)}}.
 
+full_exit(#state{config=#config{max_sockets=MaxSockets}, locks=MaxSockets,
+                 waiters=[{Creator, MRef, HInfo} | Waiters]} = State) ->
+    sd_creator:acquired(Creator, MRef, HInfo),
+    {next_state, full, State#state{waiters=Waiters}};
 full_exit(#state{config=#config{max_sockets=MaxSockets}, locks=MaxSockets,
                  waiters=[{Creator, MRef} | Waiters]} = State) ->
     sd_creator:acquired(Creator, MRef),
@@ -379,6 +390,9 @@ acquired_waiters(MaxSockets, MaxSockets, Waiters) ->
     {MaxSockets, Waiters};
 acquired_waiters(_MaxSockets, Locks, []) ->
     {Locks, []};
+acquired_waiters(MaxSockets, Locks, [{Creator, MRef, HInfo} | Waiters]) ->
+    sd_creator:acquired(Creator, MRef, HInfo),
+    acquired_waiters(MaxSockets, Locks+1, Waiters);
 acquired_waiters(MaxSockets, Locks, [{Creator, MRef} | Waiters]) ->
     sd_creator:acquired(Creator, MRef),
     acquired_waiters(MaxSockets, Locks+1, Waiters).

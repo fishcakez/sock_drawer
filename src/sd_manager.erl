@@ -25,7 +25,7 @@
 
 %% creator api
 
--export([acquire/3]).
+-export([acquire/5]).
 -export([release/2]).
 -export([leave/3]).
 
@@ -43,12 +43,14 @@ which_creators(Id) ->
 
 %% creator api
 
--spec acquire(Manager, PRef, MRef) -> ok when
+-spec acquire(Manager, PRef, Creator, MRef, HInfo) -> ok when
       Manager :: pid(),
       PRef :: reference(),
-      MRef :: reference().
-acquire(Manager, PRef, MRef) ->
-    gen_fsm:send_event(Manager, {acquire, PRef, self(), MRef}).
+      Creator :: pid(),
+      MRef :: reference(),
+      HInfo :: {pid(), pid(), pid()}.
+acquire(Manager, PRef, Creator, MRef, HInfo) ->
+    gen_fsm:send_event(Manager, {acquire, PRef, Creator, MRef, HInfo}).
 
 -spec release(Manager, PRef) -> ok when
       Manager :: pid(),

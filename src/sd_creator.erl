@@ -27,14 +27,19 @@
 -export([join_acquired/3]).
 -export([join_wait/3]).
 -export([acquired/2]).
+-export([acquired/3]).
 -export([leave/2]).
--export([left/2]).
+-export([leave/3]).
+-export([stop/2]).
+-export([stop/3]).
 
 %% gen_fsm api
 
 -export([init/1]).
 -export([join/2]).
 -export([join/3]).
+-export([wait_join/2]).
+-export([wait_join/3]).
 -export([prepare/2]).
 -export([prepare/3]).
 -export([wait/2]).
@@ -75,11 +80,20 @@ join_wait(Creator, PRef, MRef) ->
 acquired(Creator, MRef) ->
     gen_fsm:send_event(Creator, {acquired, MRef}).
 
+acquired(Creator, MRef, HInfo) ->
+    gen_fsm:send_event(Creator, {acquired, MRef, HInfo}).
+
 leave(Creator, MRef) ->
     gen_fsm:send_event(Creator, {leave, MRef}).
 
-left(Creator, MRef) ->
-    gen_fsm:send_event(Creator, {left, MRef}).
+leave(Creator, MRef, HInfo) ->
+    gen_fsm:send_event(Creator, {leave, MRef, HInfo}).
+
+stop(Creator, MRef) ->
+    gen_fsm:send_event(Creator, {stop, MRef}).
+
+stop(Creator, MRef, Reason) ->
+    gen_fsm:send_event(Creator, {stop, MRef, Reason}).
 
 %% gen_fsm api
 
@@ -118,37 +132,47 @@ join({join_acquired, PRef, MRef},
 join({join_wait, PRef, MRef},
      #state{config=#config{pool_ref=PRef} = Config} = State) ->
     State2 = State#state{config=Config#config{manager_ref=MRef}},
-    {next_state, wait, State2}.
+    {next_state, wait_join, State2}.
 
 join(Event, _From, State) ->
+    {stop, {bad_event, Event}, State}.
+
+wait_join({acquired, MRef}, #state{config=#config{manager_ref=MRef,
+                                             creation=Creation}} = State) ->
+    {next_state, Creation, State, 0};
+wait_join({leave, MRef}, #state{config=#config{manager_ref=MRef}} = State) ->
+    {stop, normal, State}.
+
+wait_join(Event, _From, State) ->
     {stop, {bad_event, Event}, State}.
 
 prepare(timeout, #state{config=#config{pool_ref=PRef, manager=Manager,
                                        manager_ref=MRef,
                                        handler_sups=HandlerSups}} = State) ->
-    case start_handler(HandlerSups) of
-        {ok, Handler, HandlerInfo} ->
-            sd_manager:acquire(Manager, PRef, MRef),
-            State2 = State#state{handler=Handler, handler_info=HandlerInfo},
-            {next_state, wait, State2};
-        ignore ->
-            {stop, normal, State};
-        {error, Reason} ->
-            {stop, {failed_to_start_child, handler, Reason}, State}
-    end;
+    HandlerSup = handler_sup(HandlerSups),
+    sd_handler_sup:acquire(HandlerSup, PRef, Manager, MRef),
+    {next_state, wait, State};
 prepare({leave, MRef}, #state{config=#config{manager_ref=MRef}} = State) ->
     {stop, normal, State}.
 
 prepare(Event, _From, State) ->
     {stop, {bad_event, Event}, State}.
 
-wait({acquired, MRef}, #state{config=#config{manager_ref=MRef,
-                                             creation=Creation}} = State) ->
-    {next_state, Creation, State, 0};
-wait({left, MRef}, #state{config=#config{manager_ref=MRef} = Config} = State) ->
-    {stop, normal, State#state{config=Config#config{manager_ref=undefined}}};
+
+wait({acquired, MRef, {Handler, HandlerSup, HSChild}},
+     #state{config=#config{manager_ref=MRef, creation=Creation}} = State) ->
+    State2 = State#state{handler=Handler, handler_info={HandlerSup, HSChild}},
+    {next_state, Creation, State2, 0};
+wait({stop, MRef}, #state{config=#config{manager_ref=MRef}} = State) ->
+    {stop, normal, State};
+wait({stop, Reason, MRef},  #state{config=#config{manager_ref=MRef}} = State) ->
+    {stop, Reason, State};
+wait({leave, MRef, {Handler, HandlerSup, HSChild}},
+     #state{config=#config{manager_ref=MRef}} = State) ->
+    State2 = State#state{handler=Handler, handler_info={HandlerSup, HSChild}},
+    {stop, normal, State2};
 wait({leave, MRef}, #state{config=#config{manager_ref=MRef}} = State) ->
-    {stop, normal, State}.
+    {next_state, wait, State}.
 
 wait(Event, _From, State) ->
     {stop, {bad_event, Event}, State}.
@@ -338,9 +362,12 @@ terminate(_State) ->
 
 %% internal
 
-start_handler(HandlerSups) ->
+handler_sup(HandlerSups) ->
     N = erlang:system_info(scheduler_id),
-    HandlerSup = element(N, HandlerSups),
+    element(N, HandlerSups).
+
+start_handler(HandlerSups) ->
+    HandlerSup = handler_sup(HandlerSups),
     case sd_handler_sup:start_handler(HandlerSup) of
         {ok, undefined} ->
             ignore;
