@@ -78,7 +78,7 @@ init({Id, Mod, Args}) ->
             State = #state{config=Config},
             {ok, full, State};
         {ok, MaxSockets}
-          when (is_integer(MaxSockets) andalso MaxSockets > 0) orelse
+          when (is_integer(MaxSockets) andalso MaxSockets >= 0) orelse
                MaxSockets =:= infinity ->
             Config = #config{id=Id, mod=Mod, args=Args, max_sockets=MaxSockets},
             State = #state{config=Config},
@@ -338,7 +338,7 @@ code_change(_OldVsn, ready,
         {ok, MaxSockets}
           when is_integer(MaxSockets) andalso MaxSockets > Locks ->
             {ok, ready, #state{config=Config#config{max_sockets=MaxSockets}}};
-        {ok, MaxSockets} when is_integer(MaxSockets) andalso MaxSockets > 0 ->
+        {ok, MaxSockets} when is_integer(MaxSockets) andalso MaxSockets >= 0 ->
             {ok, full, #state{config=Config#config{max_sockets=MaxSockets}}};
         ignore ->
             {ok, ready, State};
@@ -352,7 +352,7 @@ code_change(_OldVsn, full,
     case catch Mod:init(Args) of
         {ok, infinity} ->
             full_code_change(infinity, State);
-        {ok, MaxSockets} when is_integer(MaxSockets) andalso MaxSockets > 0 ->
+        {ok, MaxSockets} when is_integer(MaxSockets) andalso MaxSockets >= 0 ->
             full_code_change(MaxSockets, State);
         ignore ->
             {ok, full, State};
