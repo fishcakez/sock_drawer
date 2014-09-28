@@ -334,12 +334,15 @@ code_change(_OldVsn, ready,
                    locks=Locks} = State, _Extra) ->
     case catch Mod:init(Args) of
         {ok, infinity} ->
-            {ok, ready, #state{config=Config#config{max_sockets=infinity}}};
+            Config2 = Config#config{max_sockets=infinity},
+            {ok, ready, State#state{config=Config2}};
         {ok, MaxSockets}
           when is_integer(MaxSockets) andalso MaxSockets > Locks ->
-            {ok, ready, #state{config=Config#config{max_sockets=MaxSockets}}};
+            Config2 = Config#config{max_sockets=MaxSockets},
+            {ok, ready, State#state{config=Config2}};
         {ok, MaxSockets} when is_integer(MaxSockets) andalso MaxSockets >= 0 ->
-            {ok, full, #state{config=Config#config{max_sockets=MaxSockets}}};
+            Config2 = Config#config{max_sockets=MaxSockets},
+            {ok, full, State#state{config=Config2}};
         ignore ->
             {ok, ready, State};
         {'EXIT', Reason} ->
