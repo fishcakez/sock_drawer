@@ -58,7 +58,7 @@
 
 -type name() :: {sock_drawer:id(), {sd_creator, {reference(), pos_integer()}}}.
 
--record(state, {id, pool_ref, start_ref, ack_ref, socket, handler_sups,
+-record(state, {id, pool, pool_ref, start_ref, ack_ref, socket, handler_sups,
                 creators, monitors=sd_monitors:new()}).
 
 %% public api
@@ -116,7 +116,7 @@ whereis_name({{_SDName, Ref} = Id, {sd_creator, {PRef, N}}})
 %% gen api
 
 init_it(Starter, _Parent, Name, ?MODULE, {Id, PRef, Socket, Size}, Opts) ->
-    try init_it(Id, PRef, Socket, Size) of
+    try init_it(Id, PRef, Starter, Socket, Size) of
         {ok, State} ->
             gen_fsm:enter_loop(?MODULE, Opts, init, State, Name)
     catch
@@ -131,15 +131,15 @@ init_it(Starter, _Parent, Name, ?MODULE, {Id, PRef, Socket, Size}, Opts) ->
             exit(Reason)
     end.
 
-init_it(Id, PRef, Socket, Size) ->
+init_it(Id, PRef, Starter, Socket, Size) ->
     HandlerSups = start_handler_sups(Id, PRef),
     {_Pid, SRef} = spawn_opt(fun() ->
                                      start_creators(Id, PRef, Socket,
                                                     HandlerSups, Size)
                              end, [link, monitor]),
     Creators = array:new([{size, Size}, {fixed, true}]),
-    {ok, #state{id=Id, pool_ref=PRef, start_ref=SRef, socket=Socket,
-                handler_sups=HandlerSups, creators=Creators}}.
+    {ok, #state{id=Id, pool=Starter, pool_ref=PRef, start_ref=SRef,
+                socket=Socket, handler_sups=HandlerSups, creators=Creators}}.
 
 start_handler_sups(Id, PRef) ->
     N = erlang:system_info(schedulers),
@@ -258,11 +258,11 @@ format_state(#state{} = State) ->
 code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 
-terminate(shutdown, shutdown, #state{id=Id, pool_ref=PRef}) ->
+terminate(shutdown, shutdown, #state{id=Id, pool=Pool}) ->
     % This will call the supervisor of our parent to terminate our parent, so
     % will never return as parent will send a shutdown exit signal (and not
     % trapping exits). Thus our exit signal will still be shutdown.
-    sd_pool_sup:terminate_pool(Id, PRef);
+    ok = sd_pool_sup:terminate_pool(Id, Pool);
 terminate(_Reason, _StateName, _State) ->
     ok.
 
