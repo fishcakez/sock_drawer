@@ -374,9 +374,8 @@ code_change(OldVsn, reload, #reload{state_name=StateName, state=State} = Reload,
     end.
 
 full_code_change(MaxSockets,
-                 #state{config=#config{max_sockets=OldMaxSockets} = Config,
-                        locks=Locks, waiters=Waiters} = State)
-  when MaxSockets > OldMaxSockets ->
+                 #state{config=Config, locks=Locks, waiters=Waiters} = State)
+  when MaxSockets > Locks ->
     {Locks2, Waiters2} = acquired_waiters(MaxSockets, Locks, Waiters),
     Config2 = Config#config{max_sockets=MaxSockets},
     State2 = State#state{config=Config2, locks=Locks2, waiters=Waiters2},
