@@ -24,6 +24,7 @@
 %% public api
 
 -export([start_link/3]).
+-export([start_link/4]).
 
 %% gen_fsm api
 
@@ -40,17 +41,20 @@
 
 %% types
 
--record(state, {id, pool_ref, sock_info, socket}).
+-record(state, {id, reload, pool_ref, sock_info, socket}).
 
 %% public api
 
 start_link(SockInfo, Id, PRef) ->
-    gen_fsm:start_link(?MODULE, {Id, PRef, SockInfo}, []).
+    start_link(undefined, SockInfo, Id, PRef).
+
+start_link(Reload, SockInfo, Id, PRef) ->
+    gen_fsm:start_link(?MODULE, {Id, Reload, PRef, SockInfo}, []).
 
 %% gen_fsm api
 
-init({Id, PRef, SockInfo}) ->
-    {ok, init, #state{id=Id, pool_ref=PRef, sock_info=SockInfo}}.
+init({Id, Reload, PRef, SockInfo}) ->
+    {ok, init, #state{id=Id, reload=Reload, pool_ref=PRef, sock_info=SockInfo}}.
 
 init(Event, State) ->
     {stop, {bad_event, Event}, State}.
@@ -58,8 +62,11 @@ init(Event, State) ->
 init(Event, _From, State) ->
     {stop, {bad_event, Event}, State}.
 
-active(timeout, #state{socket=Socket} = State) ->
+active(timeout, #state{reload=undefined, socket=Socket} = State) ->
     gen_tcp:send(Socket, "hi"),
+    {next_state, active, State};
+active(timeout, #state{reload=Reload, socket=Socket} = State) ->
+    gen_tcp:send(Socket, ["hi", <<Reload:32>>]),
     {next_state, active, State}.
 
 active(Event, _From, State) ->
@@ -76,6 +83,7 @@ handle_info({socket, PRef, Socket}, init, #state{pool_ref=PRef} = State) ->
     inet:setopts(Socket, [{active, once}]),
     {next_state, active, State#state{socket=Socket}, 0};
 handle_info({tcp_closed, Socket}, active, #state{socket=Socket} = State) ->
+    gen_tcp:close(Socket),
     {stop, normal, State};
 handle_info({tcp, Socket, Data}, active, #state{socket=Socket} = State) ->
     gen_tcp:send(Socket, Data),

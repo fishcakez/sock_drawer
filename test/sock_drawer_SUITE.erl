@@ -46,22 +46,25 @@
 -export([purge/1]).
 -export([restart_targeter/1]).
 -export([restart_manager/1]).
+-export([simple_statem/1]).
 
 %% common_test api
 
 all() ->
-    [{group, simple}].
+    [{group, simple},
+     {group, property}].
 
 suite() ->
-    [{timetrap, {seconds, 30}}].
+    [{timetrap, {seconds, 300}}].
 
 groups() ->
-    [{simple, [{repeat, 100}], [basic_accept, basic_connect, max_sockets, graceful_shutdown,
-               reload, reload_targeter, reload_manager, purge, restart_targeter,
-               restart_manager]}].
+    [{simple, [parallel],
+      [basic_accept, basic_connect, max_sockets, graceful_shutdown, reload,
+       reload_targeter, reload_manager, purge, restart_targeter,
+       restart_manager]},
+     {property, [simple_statem]}].
 
 init_per_suite(Config) ->
-    ok = application:start(sock_drawer),
     Config.
 
 end_per_suite(_Config) ->
@@ -71,10 +74,11 @@ group(_Group) ->
     [].
 
 init_per_group(_Group, Config) ->
+    ok = application:start(sock_drawer),
     Config.
 
 end_per_group(_Group, _Config) ->
-    ok.
+    ok = application:stop(sock_drawer).
 
 init_per_testcase(_TestCase, Config) ->
     Config.
@@ -408,5 +412,44 @@ restart_manager(_Config) ->
         end
     end.
 
+simple_statem(_Config) ->
+    case sd_simple_statem:quickcheck([{numtests, 1000}, long_result, {on_output, fun log/2}]) of
+        true ->
+            ok;
+        {error, Reason} ->
+            error(Reason);
+        CounterExample ->
+            ct:log("Counter Example:~n~p", [CounterExample]),
+            error(counterexample)
+    end.
+
+%% Custom log format.
+log(".", []) ->
+    ok;
+log("!", []) ->
+    ok;
+log("OK: " ++ Comment = Format, Args) ->
+    ct:comment(no_trailing_newline(Comment), Args),
+    io:format(no_trailing_newline(Format), Args);
+log("Failed: " ++ Comment = Format, Args) ->
+    ct:comment(no_trailing_newline(Comment), Args),
+    io:format(no_trailing_newline(Format), Args);
+log(Format, Args) ->
+    io:format(no_trailing_newline(Format), Args).
+
+no_trailing_newline(Format) ->
+    try lists:split(length(Format) - 2, Format) of
+        {Format2, "~n"} ->
+            Format2;
+        _ ->
+            Format
+    catch
+        error:badarg ->
+            Format
+    end.
+
+%% Socket options
 opts() ->
     [{active, false}, {packet, 4}, binary].
+
+
