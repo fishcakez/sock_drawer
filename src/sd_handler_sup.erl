@@ -77,7 +77,7 @@ terminate_handler(Sup, Pid) ->
       Sup :: pid(),
       Count :: non_neg_integer().
 count_handlers(Sup) ->
-    Counts = supervisor:counter_children(Sup),
+    Counts = supervisor:count_children(Sup),
     proplists:get_value(active, Counts, 0).
 
 %% gen_server api
