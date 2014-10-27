@@ -24,6 +24,7 @@
 %% public api
 
 -export([start_link/4]).
+-export([socket/1]).
 
 %% gen_fsm api
 
@@ -48,6 +49,9 @@
 start_link(Opts, Timeout, SockInfo, Id) ->
     gen_fsm:start_link({via, sd_reg, {Id, ?MODULE}}, ?MODULE,
                        {Id, SockInfo, Opts, Timeout}, []).
+
+socket(Targeter) ->
+    gen_fsm:sync_send_all_state_event(Targeter, socket).
 
 %% gen_fsm api
 
@@ -95,8 +99,8 @@ seeking(Event, _From, State) ->
 handle_event(Event, _StateName, State) ->
     {stop, {bad_event, Event}, State}.
 
-handle_sync_event(Event, _From, _StateName, State) ->
-    {stop, {bad_event, Event}, State}.
+handle_sync_event(socket, _From, StateName, #state{socket=Socket} = State) ->
+    {reply, Socket, StateName, State}.
 
 handle_info({'EXIT', _, Reason}, _StateName, State) ->
     {stop, Reason, State};

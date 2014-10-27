@@ -23,8 +23,8 @@
 
 %% public api
 
--export([start_link/3]).
 -export([start_link/4]).
+-export([start_link/5]).
 
 %% gen_fsm api
 
@@ -45,10 +45,10 @@
 
 %% public api
 
-start_link(SockInfo, Id, PRef) ->
-    start_link(undefined, SockInfo, Id, PRef).
+start_link(SockInfo, Id, PRef, Manager) ->
+    start_link(undefined, SockInfo, Id, PRef, Manager).
 
-start_link(Reload, SockInfo, Id, PRef) ->
+start_link(Reload, SockInfo, Id, PRef, _Manager) ->
     gen_fsm:start_link(?MODULE, {Id, Reload, PRef, SockInfo}, []).
 
 %% gen_fsm api

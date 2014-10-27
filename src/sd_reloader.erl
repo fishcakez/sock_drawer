@@ -81,12 +81,12 @@ check_manager(Id, RRef, #specs{manager=Manager} = Specs) ->
 
 ensure_manager(Id, RRef, #specs{manager=Manager} = Specs) ->
     case sd_manager_sup:start_manager(Id, Manager) of
-        {ok, _Pid} ->
-            check_targeter(Id, RRef, Specs);
-        {ok, _Pid, _Info} ->
-            check_targeter(Id, RRef, Specs);
-        {error, {already_started, _Pid}} ->
-            check_targeter(Id, RRef, Specs);
+        {ok, ManPid} ->
+            check_targeter(Id, RRef, ManPid, Specs);
+        {ok, ManPid, _Info} ->
+            check_targeter(Id, RRef, ManPid, Specs);
+        {error, {already_started, ManPid}} ->
+            check_targeter(Id, RRef, ManPid, Specs);
         {error, already_present = Reason} ->
             failed_to_start_child(manager, Reason);
         {error, {Reason, _Child}} ->
@@ -117,12 +117,12 @@ stop_manager(Id) ->
 start_manager(Id, RRef, #specs{manager=Manager} = Specs) ->
     sd_agent:erase(Id, manager),
     case sd_manager_sup:start_manager(Id, Manager) of
-        {ok, _Pid} ->
+        {ok, ManPid} ->
             sd_agent:store(Id, manager, Manager),
-            start_targeter(Id, RRef, Specs);
-        {ok, _Pid, _Info} ->
+            start_targeter(Id, RRef, ManPid, Specs);
+        {ok, ManPid, _Info} ->
             sd_agent:store(Id, manager, Manager),
-            start_targeter(Id, RRef, Specs);
+            start_targeter(Id, RRef, ManPid, Specs);
         {error, {already_started, _Pid} = Reason} ->
             failed_to_start_child(manager, Reason);
         {error, already_present = Reason} ->
@@ -131,44 +131,44 @@ start_manager(Id, RRef, #specs{manager=Manager} = Specs) ->
             failed_to_start_child(manager, Reason)
     end.
 
-check_targeter(Id, RRef, #specs{targeter=Targeter} = Specs) ->
+check_targeter(Id, RRef, ManPid, #specs{targeter=Targeter} = Specs) ->
     case sd_agent:find(Id, targeter) of
         {ok, Targeter} ->
-            ensure_targeter(Id, RRef, Specs);
+            ensure_targeter(Id, RRef, ManPid, Specs);
         _Other ->
-            reload_targeter(Id, RRef, Specs)
+            reload_targeter(Id, RRef, ManPid, Specs)
     end.
 
-ensure_targeter(Id, RRef, #specs{targeter=Targeter} = Specs) ->
+ensure_targeter(Id, RRef, ManPid, #specs{targeter=Targeter} = Specs) ->
     case sd_targeter_sup:start_targeter(Id, Targeter) of
-        {ok, _Pid} ->
-            start_pool(Id, RRef, Specs);
-        {ok, _Pid, _Info} ->
-            start_pool(Id, RRef, Specs);
-        {error, {already_started, _Pid}} ->
-            start_pool(Id, RRef, Specs);
+        {ok, TarPid} ->
+            start_pool(Id, RRef, ManPid, TarPid, Specs);
+        {ok, TarPid, _Info} ->
+            start_pool(Id, RRef, ManPid, TarPid, Specs);
+        {error, {already_started, TarPid}} ->
+            start_pool(Id, RRef, ManPid, TarPid, Specs);
         {error, already_present = Reason} ->
             failed_to_start_child(targeter, Reason);
         {error, {Reason, _Child}} ->
             failed_to_start_child(targeter, Reason)
     end.
 
-reload_targeter(Id, RRef, Specs) ->
+reload_targeter(Id, RRef, ManPid, Specs) ->
     ok = stop_targeter(Id),
-    start_targeter(Id, RRef, Specs).
+    start_targeter(Id, RRef, ManPid, Specs).
 
 stop_targeter(Id) ->
     ok = sd_targeter_sup:terminate_targeter(Id).
 
-start_targeter(Id, RRef, #specs{targeter=Targeter} = Specs) ->
+start_targeter(Id, RRef, ManPid, #specs{targeter=Targeter} = Specs) ->
     sd_agent:erase(Id, targeter),
     case sd_targeter_sup:start_targeter(Id, Targeter) of
-        {ok, _Pid} ->
+        {ok, TarPid} ->
             sd_agent:store(Id, targeter, Targeter),
-            start_pool(Id, RRef, Specs);
-        {ok, _Pid, _Info} ->
+            start_pool(Id, RRef, ManPid, TarPid, Specs);
+        {ok, TarPid, _Info} ->
             sd_agent:store(Id, targeter, Targeter),
-            start_pool(Id, RRef, Specs);
+            start_pool(Id, RRef, ManPid, TarPid, Specs);
         {error, {already_started, _Pid} = Reason} ->
             failed_to_start_child(targeter, Reason);
         {error, already_present = Reason} ->
@@ -177,12 +177,12 @@ start_targeter(Id, RRef, #specs{targeter=Targeter} = Specs) ->
             failed_to_start_child(targeter, Reason)
     end.
 
-start_pool(Id, RRef, #specs{watcher=Watcher, creator=Creator,
-                            handler=Handler}) ->
+start_pool(Id, RRef, ManPid, TarPid,
+           #specs{watcher=Watcher, creator=Creator, handler=Handler}) ->
     PRef = make_ref(),
-    {ok, Socket} = sd_agent:find(Id, socket),
-    case sd_pool_sup:start_pool(Id, RRef, PRef, Socket, Watcher, Creator,
-                                Handler) of
+    Socket = sd_targeter:socket(TarPid),
+    case sd_pool_sup:start_pool(Id, RRef, PRef, ManPid, Socket, Watcher,
+                                Creator, Handler) of
         {ok, _Pid} ->
             ok;
         {ok, _Pid, _Info} ->

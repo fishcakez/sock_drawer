@@ -23,7 +23,7 @@
 
 %% public api
 
--export([start_link/10]).
+-export([start_link/11]).
 -export([join_acquired/3]).
 -export([join_wait/3]).
 -export([acquired/2]).
@@ -66,10 +66,11 @@
 %% public api
 
 start_link(Opts, Timeout, TBackoff, EBackoff, SockInfo, Id, PRef,
-           N, Socket, HandlerSups) ->
+           N, Socket, Manager, HandlerSups) ->
     gen_fsm:start_link({via, sd_reg, {Id, {?MODULE, {PRef, N}}}}, ?MODULE,
-                       {Id, PRef, N, HandlerSups, SockInfo, Socket, Opts,
-                        Timeout, TBackoff, EBackoff}, [{debug, [{log,10}]}]).
+                       {Id, PRef, N, Manager, HandlerSups, SockInfo, Socket,
+                        Opts, Timeout, TBackoff, EBackoff},
+                       [{debug, [{log,10}]}]).
 
 join_acquired(Creator, PRef, MRef) ->
     gen_fsm:send_event(Creator, {join_acquired, PRef, MRef}).
@@ -97,11 +98,10 @@ stop(Creator, MRef, Reason) ->
 
 %% gen_fsm api
 
-init({Id, PRef, N, HandlerSups, {Family, Creation, Target}, Socket, Opts,
-      Timeout, {MinTBackoff, MaxTBackoff}, {MinEBackoff, MaxEBackoff}}) ->
+init({Id, PRef, N, Manager, HandlerSups, {Family, Creation, Target}, Socket,
+      Opts, Timeout, {MinTBackoff, MaxTBackoff}, {MinEBackoff, MaxEBackoff}}) ->
     HandlerSups2 = list_to_tuple(HandlerSups),
-    Manager = sd_reg:whereis_name({Id, sd_manager}),
-    case start_handler(HandlerSups2) of
+    case start_handler(HandlerSups2, Manager) of
         {ok, Handler, HandlerInfo} when is_pid(Manager) ->
             Config = #config{id=Id, pool_ref=PRef, number=N, manager=Manager,
                              handler_sups=HandlerSups2, family=Family,
@@ -366,9 +366,9 @@ handler_sup(HandlerSups) ->
     N = erlang:system_info(scheduler_id),
     element(N, HandlerSups).
 
-start_handler(HandlerSups) ->
+start_handler(HandlerSups, Manager) ->
     HandlerSup = handler_sup(HandlerSups),
-    case sd_handler_sup:start_handler(HandlerSup) of
+    case sd_handler_sup:start_handler(HandlerSup, Manager) of
         {ok, undefined} ->
             ignore;
         {ok, Handler} ->

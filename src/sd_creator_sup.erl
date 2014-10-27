@@ -24,7 +24,7 @@
 %% public api
 
 -export([start_link/3]).
--export([start_creator/5]).
+-export([start_creator/6]).
 
 %% supervisor api
 
@@ -43,18 +43,19 @@ start_link(Id, PRef, Creator) ->
     supervisor:start_link({via, sd_reg, {Id, {?MODULE, PRef}}}, ?MODULE,
                           Creator).
 
--spec start_creator(Id, PRef, N, Socket, HandlerSups) ->
+-spec start_creator(Id, PRef, N, Socket, Manager, HandlerSups) ->
     {ok, Pid} | {error, Reason} when
       Id :: sock_drawer:id(),
       PRef :: reference(),
       N :: pos_integer(),
       Socket :: term(),
+      Manager :: pid(),
       HandlerSups :: [pid(), ...],
       Pid :: pid(),
       Reason :: term().
-start_creator(Id, PRef, N, Socket, HandlerSups) ->
+start_creator(Id, PRef, N, Socket, Manager, HandlerSups) ->
     supervisor:start_child({via, sd_reg, {Id, {?MODULE, PRef}}},
-                           [N, Socket, HandlerSups]).
+                           [N, Socket, Manager, HandlerSups]).
 
 %% supervisor api
 

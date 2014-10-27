@@ -23,7 +23,7 @@
 
 %% public api
 
--export([start_link/7]).
+-export([start_link/8]).
 
 %% supervisor api
 
@@ -31,25 +31,26 @@
 
 %% public api
 
--spec start_link(Id, RRef, PRef, Socket, Watcher, Creator, Handler) ->
+-spec start_link(Id, RRef, PRef, Manager, Socket, Watcher, Creator, Handler) ->
     {ok, Pid} | {error, Reason} when
       Id :: sock_drawer:id(),
       RRef :: reference(),
       PRef :: reference(),
+      Manager :: pid(),
       Socket :: term(),
       Watcher :: supervisor:child_spec(),
       Creator :: supervisor:child_spec(),
       Handler :: supervisor:child_spec(),
       Pid :: pid(),
       Reason :: term().
-start_link(Id, RRef, PRef, Socket, Watcher, Creator, Handler) ->
+start_link(Id, RRef, PRef, Manager, Socket, Watcher, Creator, Handler) ->
     Name = {via, sd_reg, {Id, {?MODULE, {RRef, PRef}}}},
-    supervisor:start_link(Name, ?MODULE,
-                          {Id, PRef, Socket, Watcher, Creator, Handler}).
+    Args = {Id, PRef, Manager, Socket, Watcher, Creator, Handler},
+    supervisor:start_link(Name, ?MODULE, Args).
 
 %% supervisor api
 
-init({Id, PRef, Socket, Watcher, Creator, Handler}) ->
+init({Id, PRef, Manager, Socket, Watcher, Creator, Handler}) ->
     HandlerSuper = {sd_handler_supersup,
                     {sd_handler_supersup, start_link, [Id, PRef, Handler]},
                     permanent, infinity, supervisor, [sd_handler_supersup]},
@@ -57,5 +58,5 @@ init({Id, PRef, Socket, Watcher, Creator, Handler}) ->
     CreatorSup = {sd_creator_sup,
                   {sd_creator_sup, start_link, [Id, PRef, Creator2]},
                   permanent, infinity, supervisor, [sd_creator_sup]},
-    Watcher2 = sd_util:append_args(Watcher, [PRef, Socket]),
+    Watcher2 = sd_util:append_args(Watcher, [PRef, Manager, Socket]),
     {ok, {{rest_for_one, 0, 1}, [HandlerSuper, CreatorSup, Watcher2]}}.

@@ -24,7 +24,7 @@
 %% public api
 
 -export([start_link/1]).
--export([start_pool/7]).
+-export([start_pool/8]).
 -export([terminate_pools/1]).
 -export([terminate_pool/2]).
 
@@ -41,19 +41,20 @@
 start_link(Id) ->
     supervisor:start_link({via, sd_reg, {Id, ?MODULE}}, ?MODULE, Id).
 
--spec start_pool(Id, RRef, PRef, Socket, Watcher, Creator, Handler) ->
+-spec start_pool(Id, RRef, PRef, Manager, Socket, Watcher, Creator, Handler) ->
     {ok, Pid} | {error, Reason} when
       Id :: sock_drawer:id(),
       RRef :: reference(),
       PRef :: reference(),
+      Manager :: pid(),
       Socket :: term(),
       Watcher :: supervisor:child_spec(),
       Creator :: supervisor:child_spec(),
       Handler :: supervisor:child_spec(),
       Pid :: pid(),
       Reason :: term().
-start_pool(Id, RRef, PRef, Socket, Watcher, Creator, Handler) ->
-    Args = [RRef, PRef, Socket, Watcher, Creator, Handler],
+start_pool(Id, RRef, PRef, Manager, Socket, Watcher, Creator, Handler) ->
+    Args = [RRef, PRef, Manager, Socket, Watcher, Creator, Handler],
     supervisor:start_child({via, sd_reg, {Id, ?MODULE}}, Args).
 
 -spec terminate_pools(Id) -> ok when

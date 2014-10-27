@@ -24,7 +24,7 @@
 %% public api
 
 -export([start_link/4]).
--export([start_handler/1]).
+-export([start_handler/2]).
 -export([acquire/4]).
 -export([terminate_handler/2]).
 -export([count_handlers/1]).
@@ -51,13 +51,15 @@ start_link(Id, PRef, Handler, N) ->
     Name = {via, sd_reg, {Id, {?MODULE, {PRef, N}}}},
     gen_server:start_link(Name, ?MODULE, {gen_server, Name, PRef, Handler}, []).
 
--spec start_handler(Sup) -> {ok, Pid} | {ok, Pid, Info} | {error, Reason} when
+-spec start_handler(Sup, Manager) ->
+    {ok, Pid} | {ok, Pid, Info} | {error, Reason} when
       Sup :: pid(),
+      Manager :: pid(),
       Pid :: pid(),
       Info :: term(),
       Reason :: term().
-start_handler(Sup) ->
-    supervisor:start_child(Sup, []).
+start_handler(Sup, Manager) ->
+    supervisor:start_child(Sup, [Manager]).
 
 -spec acquire(Sup, PRef, Manager, MRef) -> ok when
       Sup :: pid(),
@@ -92,7 +94,8 @@ handle_call(Request, From, State) ->
     supervisor:handle_call(Request, From, State).
 
 handle_cast({acquire, PRef, Manager, Creator, MRef}, State) ->
-    case supervisor:handle_call({start_child, []}, {self(), ?MODULE}, State) of
+    From = {self(), ?MODULE},
+    case supervisor:handle_call({start_child, [Manager]}, From, State) of
         {reply, {ok, Pid}, State2} when is_pid(Pid) ->
             HInfo = {Pid, self(), Pid},
             sd_manager:acquire(Manager, PRef, Creator, MRef, HInfo),

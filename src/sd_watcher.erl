@@ -23,7 +23,7 @@
 
 %% public api
 
--export([start_link/4]).
+-export([start_link/5]).
 -export([init_ack/2]).
 
 %% register api
@@ -63,16 +63,18 @@
 
 %% public api
 
--spec start_link(Size, Id, PRef, Socket) -> {ok, Pid} | {error, Reason} when
+-spec start_link(Size, Id, PRef, Manager, Socket) ->
+    {ok, Pid} | {error, Reason} when
       Size :: non_neg_integer(),
       Id :: sock_drawer:id(),
       PRef :: reference(),
+      Manager :: pid(),
       Socket :: term(),
       Pid :: pid(),
       Reason :: term().
-start_link(Size, Id, PRef, Socket) ->
+start_link(Size, Id, PRef, Manager, Socket) ->
     gen:start(?MODULE, link, {via, sd_reg, {Id, {?MODULE, PRef}}}, ?MODULE,
-              {Id, PRef, Socket, Size}, []).
+              {Id, PRef, Manager, Socket, Size}, []).
 
 
 -spec init_ack(Watcher, ARef) -> ok when
@@ -115,8 +117,9 @@ whereis_name({{_SDName, Ref} = Id, {sd_creator, {PRef, N}}})
 
 %% gen api
 
-init_it(Starter, _Parent, Name, ?MODULE, {Id, PRef, Socket, Size}, Opts) ->
-    try init_it(Id, PRef, Starter, Socket, Size) of
+init_it(Starter, _Parent, Name, ?MODULE, {Id, PRef, Manager, Socket, Size},
+        Opts) ->
+    try init(Id, PRef, Starter, Manager, Socket, Size) of
         {ok, State} ->
             gen_fsm:enter_loop(?MODULE, Opts, init, State, Name)
     catch
@@ -131,10 +134,10 @@ init_it(Starter, _Parent, Name, ?MODULE, {Id, PRef, Socket, Size}, Opts) ->
             exit(Reason)
     end.
 
-init_it(Id, PRef, Starter, Socket, Size) ->
+init(Id, PRef, Starter, Manager, Socket, Size) ->
     HandlerSups = start_handler_sups(Id, PRef),
     {_Pid, SRef} = spawn_opt(fun() ->
-                                     start_creators(Id, PRef, Socket,
+                                     start_creators(Id, PRef, Socket, Manager,
                                                     HandlerSups, Size)
                              end, [link, monitor]),
     Creators = array:new([{size, Size}, {fixed, true}]),
@@ -155,12 +158,13 @@ start_handler_sups(Id, PRef, N, HandlerSups) ->
             exit({shutdown, {failed_to_start_child, sd_handler_sup, Reason}})
     end.
 
-start_creators(_Id, _PRef, _Socket, _HandlerSups, 0) ->
+start_creators(_Id, _PRef, _Socket, _Manager, _HandlerSups, 0) ->
     exit(normal);
-start_creators(Id, PRef, Socket, HandlerSups, N) ->
-    case sd_creator_sup:start_creator(Id, PRef, N, Socket, HandlerSups) of
+start_creators(Id, PRef, Socket, Manager, HandlerSups, N) ->
+    case sd_creator_sup:start_creator(Id, PRef, N, Socket, Manager,
+                                      HandlerSups) of
         {ok, _Pid} ->
-            start_creators(Id, PRef, Socket, HandlerSups, N-1);
+            start_creators(Id, PRef, Socket, Manager, HandlerSups, N-1);
         {error, Reason} ->
             exit({shutdown, {failed_to_start_child, sd_creator, Reason}})
     end.
