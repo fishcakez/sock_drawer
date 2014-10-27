@@ -413,7 +413,7 @@ restart_manager(_Config) ->
     end.
 
 simple_statem(_Config) ->
-    case sd_simple_statem:quickcheck([{numtests, 1000}, long_result, {on_output, fun log/2}]) of
+    case sd_simple_statem:quickcheck([{numtests, 250}, long_result, {on_output, fun log/2}]) of
         true ->
             ok;
         {error, Reason} ->
