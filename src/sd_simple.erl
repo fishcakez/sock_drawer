@@ -44,7 +44,7 @@
 %% types
 
 -record(config, {id, mod, args, pool_ref=make_ref(), max_sockets,
-                 creators=gb_sets:new()}).
+                 creators=sd_creators:new()}).
 -record(state, {config, locks=0, waiters=[]}).
 -record(reload, {old_pool_ref, pool_ref, state, state_name, watcher, ack_ref,
                  old}).
@@ -104,9 +104,11 @@ ready({acquire, PRef, Creator, MRef, HInfo},
             {next_state, ready, State2}
     end.
 
-
-ready({leave, PRef, Creator, MRef}, _From, #state{config=Config} = State) ->
-    Config2 = leave_config(PRef, Creator, MRef, Config),
+ready({leave, PRef, Creator, MRef}, _From,
+     #state{config=#config{pool_ref=PRef,
+                           creators=Creators} = Config} = State) ->
+    Creators2 = sd_creators:left({Creator, MRef}, Creators),
+    Config2 = Config#config{creators=Creators2},
     {reply, ok, ready, State#state{config=Config2}};
 ready({release, PRef}, _From, #state{config=#config{pool_ref=PRef},
                                      locks=Locks} = State) ->
@@ -115,11 +117,15 @@ ready({join, PRef, Watcher, ARef, Creators}, _From,
       #state{config=#config{pool_ref=OldPRef, max_sockets=MaxSockets,
                             creators=Old} = Config,
              locks=Locks} = State) when PRef =/= OldPRef ->
-    {StateName, Locks2, Waiters, New} = ready_join(Creators, PRef, MaxSockets,
-                                                   Locks),
-    ok = leave_old(Old),
+    {Locks2, Waiters, New} = sd_creators:join(Creators, PRef, MaxSockets,
+                                              Locks),
+    ok = sd_creators:leave(Old),
     Config2 = Config#config{pool_ref=PRef, creators=New},
     State2 = State#state{config=Config2,locks=Locks2, waiters=Waiters},
+    StateName = if
+                    MaxSockets > Locks2 -> ready;
+                    MaxSockets =< Locks2 -> full
+                end,
     case gb_sets:size(Old) of
         0 ->
             sd_watcher:init_ack(Watcher, ARef),
@@ -133,28 +139,6 @@ ready({join, PRef, Watcher, ARef, Creators}, _From,
 ready(which_creators, _From, State) ->
     {reply, which_creators(State), ready, State}.
 
-ready_join(Creators, PRef, MaxSockets, Locks) ->
-    ready_join(Creators, PRef, MaxSockets, Locks, gb_sets:new()).
-
-ready_join(Creators, PRef, MaxSockets, MaxSockets, New) ->
-    {Waiters, New2} = full_join(Creators, PRef, [], New),
-    {full, MaxSockets, Waiters, New2};
-ready_join([], _PRef, _MaxSockets, Locks, New) ->
-    {ready, Locks, [], New};
-ready_join([Creator | Creators], PRef, MaxSockets, Locks, New) ->
-    MRef = monitor(process, Creator),
-    sd_creator:join_acquired(Creator, PRef, MRef),
-    Elem = {Creator, MRef},
-    New2 = gb_sets:insert(Elem, New),
-    ready_join(Creators, PRef, MaxSockets, Locks+1, New2).
-
-leave_old(Old) ->
-    Leave = fun({Creator, MRef}, Acc) ->
-                    sd_creator:leave(Creator, MRef),
-                    Acc
-            end,
-    gb_sets:fold(Leave, ok, Old).
-
 which_creators(#state{config=#config{creators=Creators}}) ->
     ToList = fun({Creator, _MRef}, Acc) -> [Creator | Acc] end,
     gb_sets:fold(ToList, [], Creators).
@@ -163,14 +147,11 @@ full({acquire, PRef, Creator, MRef, HInfo},
      #state{config=#config{pool_ref=PRef}, waiters=Waiters} = State) ->
     {next_state, full, State#state{waiters=[{Creator, MRef, HInfo} | Waiters]}}.
 
-leave_config(PRef, Creator, MRef,
-             #config{pool_ref=PRef, creators=Creators} = Config) ->
-    demonitor(MRef, [flush]),
-    Creators2 = gb_sets:delete({Creator, MRef}, Creators),
-    Config#config{creators=Creators2}.
-
-full({leave, PRef, Creator, MRef}, _From, #state{config=Config} = State) ->
-    Config2 = leave_config(PRef, Creator, MRef, Config),
+full({leave, PRef, Creator, MRef}, _From,
+     #state{config=#config{pool_ref=PRef,
+                           creators=Creators} = Config} = State) ->
+    Creators2 = sd_creators:left({Creator, MRef}, Creators),
+    Config2 = Config#config{creators=Creators2},
     {reply, ok, full, State#state{config=Config2}};
 full({release, PRef}, _From,
      #state{config=#config{pool_ref=PRef, max_sockets=MaxSockets},
@@ -191,11 +172,13 @@ full({release, PRef}, _From, #state{config=#config{pool_ref=PRef},
                                     locks=Locks} = State) ->
     {reply, ok, full, State#state{locks=(Locks-1)}};
 full({join, PRef, Watcher, ARef, Creators}, _From,
-      #state{config=#config{pool_ref=OldPRef, creators=Old} = Config,
-            waiters=Waiters} = State) when PRef =/= OldPRef ->
-    {Waiters2, New} = full_join(Creators, PRef),
-    Old2 = leave_waiters(Waiters, Old),
-    ok = leave_old(Old2),
+      #state{config=#config{pool_ref=OldPRef, max_sockets=MaxSockets,
+                            creators=Old} = Config,
+            locks=Locks, waiters=Waiters} = State) when PRef =/= OldPRef ->
+    {Locks, Waiters2, New} = sd_creators:join(Creators, PRef, MaxSockets,
+                                              Locks),
+    Old2 = sd_creators:leave(Waiters, Old),
+    ok = sd_creators:leave(Old2),
     Config2 = Config#config{pool_ref=PRef, creators=New},
     State2 = State#state{config=Config2, waiters=Waiters2},
     case gb_sets:size(Old) of
@@ -214,26 +197,6 @@ full(which_creators, _From,
     Reply = gb_sets:fold(ToList, [], Creators),
     {reply, Reply, full, State}.
 
-full_join(Creators, PRef) ->
-    full_join(Creators, PRef, [], gb_sets:new()).
-
-full_join([], _PRef, Waiters, New) ->
-    {Waiters, New};
-full_join([Creator | Creators], PRef, Waiters, New) ->
-    MRef = monitor(process, Creator),
-    sd_creator:join_wait(Creator, PRef, MRef),
-    Elem = {Creator, MRef},
-    New2 = gb_sets:insert(Elem, New),
-    full_join(Creators, PRef, [Elem | Waiters], New2).
-
-leave_waiters([], Old) ->
-    Old;
-leave_waiters([{Creator, MRef, HInfo} | Waiters], Old) ->
-    sd_creator:leave(Creator, MRef, HInfo),
-    leave_waiters(Waiters, gb_sets:delete({Creator, MRef}, Old));
-leave_waiters([{Creator, MRef} = Elem | Waiters], Old) ->
-    sd_creator:leave(Creator, MRef),
-    leave_waiters(Waiters, gb_sets:delete(Elem, Old)).
 
 reload({acquire, PRef, _Creator, _MRef, _HInfo} = Acquire,
        #reload{pool_ref=PRef, state_name=StateName, state=State} = Reload) ->
@@ -247,8 +210,7 @@ reload({acquire, OldPRef, Creator, MRef, HInfo},
 reload({leave, OldPRef, Creator, MRef}, _From,
        #reload{old_pool_ref=OldPRef, state_name=StateName, state=State,
                watcher=Watcher, ack_ref=ARef, old=Old} = Reload) ->
-    demonitor(MRef, [flush]),
-    Old2 = gb_sets:delete({Creator, MRef}, Old),
+    Old2 = sd_creators:left({Creator, MRef}, Old),
     case gb_sets:size(Old2) of
         0 ->
             sd_watcher:init_ack(Watcher, ARef),
